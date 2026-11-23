@@ -1,81 +1,59 @@
 import Mathlib
 import PEqualNP.Defs
 
-/-!
-# In a least circuit, a wire below the output is read by at most one later gate
-
-Let wire `h` force the output (`h` true implies the output true). If two later gates read `h`,
-make them read the missing wire instead (`false`), propagate constants so that both of them
-drop out, and add one OR gate of `h` and the new output. The result computes the same
-function: where `h` is false nothing changed, and where `h` is true both are true. It has at
-least one gate fewer, so the circuit was not least.
--/
-
 namespace PEqualNP.Outside.L_meta_194_aux
 
 open PEqualNP.CircuitLowerBounds
 
-/-- What an old wire becomes: a constant, or a wire of the new circuit. -/
-inductive V where
-  | c (b : Bool)
-  | w (k : ℕ)
-  deriving DecidableEq
+abbrev V : Type := Bool ⊕ ℕ
 
-/-- The value of `v` given the wire values `W` of the new circuit. -/
-def V.den (W : List Bool) : V → Bool
-  | .c b => b
-  | .w k => W.getD k false
+def den (W : List Bool) : V → Bool
+  | Sum.inl b => b
+  | Sum.inr k => W.getD k false
 
-/-- The wire index of `v`, if it is a wire. -/
-def V.getW : V → Option ℕ
-  | .c _ => none
-  | .w k => some k
+def getW : V → Option ℕ
+  | Sum.inl _ => none
+  | Sum.inr k => some k
 
-/-- `v` names an existing wire (or a constant) among `L` wires. -/
-def V.ok (L : ℕ) : V → Prop
-  | .c _ => True
-  | .w k => k < L
+def okV (L : ℕ) : V → Prop
+  | Sum.inl _ => True
+  | Sum.inr k => k < L
 
-/-- A gate on the inputs `vs`, simplified: `some v` when it is a constant or a copy. -/
 def simpV : GateOp → List V → Option V
   | .and, vs =>
-    if V.c false ∈ vs then some (V.c false) else
-      match vs.filterMap V.getW with
-      | [] => some (V.c true)
-      | [k] => some (V.w k)
+    if Sum.inl false ∈ vs then some (Sum.inl false) else
+      match vs.filterMap getW with
+      | [] => some (Sum.inl true)
+      | [k] => some (Sum.inr k)
       | _ => none
   | .or, vs =>
-    if V.c true ∈ vs then some (V.c true) else
-      match vs.filterMap V.getW with
-      | [] => some (V.c false)
-      | [k] => some (V.w k)
+    if Sum.inl true ∈ vs then some (Sum.inl true) else
+      match vs.filterMap getW with
+      | [] => some (Sum.inl false)
+      | [k] => some (Sum.inr k)
       | _ => none
   | .not, vs =>
-    match vs.headD (V.c false) with
-    | .c b => some (V.c (!b))
-    | .w _ => none
+    match vs.headD (Sum.inl false) with
+    | Sum.inl b => some (Sum.inl (!b))
+    | Sum.inr _ => none
   | _, _ => none
 
-/-- The wires a kept gate reads in the new circuit. -/
 def emitIns : GateOp → List V → List ℕ
   | .not, vs =>
-    match vs.headD (V.c false) with
-    | .c _ => []
-    | .w k => [k]
-  | _, vs => vs.filterMap V.getW
+    match vs.headD (Sum.inl false) with
+    | Sum.inl _ => []
+    | Sum.inr k => [k]
+  | _, vs => vs.filterMap getW
 
-/-- One step of the transformation: map of old wires, and gates of the new circuit. -/
 def step (n : ℕ) (st : List V × List Gate) (g : Gate) : List V × List Gate :=
-  match simpV g.op (g.inputs.map (fun i => st.1.getD i (V.c false))) with
+  match simpV g.op (g.inputs.map (fun i => st.1.getD i (Sum.inl false))) with
   | some v => (st.1 ++ [v], st.2)
-  | none => (st.1 ++ [V.w (n + st.2.length)],
-      st.2 ++ [⟨g.op, emitIns g.op (g.inputs.map (fun i => st.1.getD i (V.c false)))⟩])
+  | none => (st.1 ++ [Sum.inr (n + st.2.length)],
+      st.2 ++ [⟨g.op, emitIns g.op (g.inputs.map (fun i => st.1.getD i (Sum.inl false)))⟩])
 
-/-- One step of circuit evaluation. -/
 def wstep (w : List Bool) (g : Gate) : List Bool :=
   w ++ [g.op.eval (g.inputs.map fun i => w.getD i false)]
 
-/-- The three allowed operations. -/
 def Basic (op : GateOp) : Prop := op = .and ∨ op = .or ∨ op = .not
 
 lemma wires_eq (C : Circuit) (x : List Bool) : C.wires x = C.gates.foldl wstep x := rfl
@@ -98,80 +76,80 @@ lemma getD_concat {α : Type} (l : List α) (a d : α) (i : ℕ) :
     · rfl
     · simp; omega
 
-lemma den_concat (W : List Bool) (b : Bool) (v : V) (h : v.ok W.length) :
-    v.den (W ++ [b]) = v.den W := by
+lemma den_concat (W : List Bool) (b : Bool) (v : V) (h : okV W.length v) :
+    den (W ++ [b]) v = den W v := by
   cases v with
-  | c => rfl
-  | w k =>
-    simp only [V.ok] at h
-    simp only [V.den, getD_concat, if_pos h]
+  | inl => rfl
+  | inr k =>
+    simp only [okV] at h
+    simp only [den, getD_concat, if_pos h]
 
-lemma ok_mono {L L' : ℕ} (h : L ≤ L') (v : V) (hv : v.ok L) : v.ok L' := by
+lemma ok_mono {L L' : ℕ} (h : L ≤ L') (v : V) (hv : okV L v) : okV L' v := by
   cases v with
-  | c => trivial
-  | w k => simp only [V.ok] at *; omega
+  | inl => trivial
+  | inr k => simp only [okV] at *; omega
 
 lemma all_den (W : List Bool) (vs : List V) :
-    (vs.map (V.den W)).all id =
-      (decide (V.c false ∉ vs) && ((vs.filterMap V.getW).map (fun k => W.getD k false)).all id) := by
+    (vs.map (den W)).all id =
+      (decide (Sum.inl false ∉ vs) && ((vs.filterMap getW).map (fun k => W.getD k false)).all id) := by
   induction vs with
   | nil => simp
   | cons v vs ih =>
     cases v with
-    | c b => cases b <;> simp [V.den, V.getW, ih]
-    | w k =>
-      simp only [List.map_cons, List.all_cons, ih, List.filterMap_cons, V.getW, V.den,
+    | inl b => cases b <;> simp [den, getW, ih]
+    | inr k =>
+      simp only [List.map_cons, List.all_cons, ih, List.filterMap_cons, getW, den,
         List.mem_cons, reduceCtorEq, false_or, id]
-      cases W.getD k false <;> cases decide (V.c false ∉ vs) <;> simp
+      cases W.getD k false <;> cases decide (Sum.inl false ∉ vs) <;> simp
 
 lemma any_den (W : List Bool) (vs : List V) :
-    (vs.map (V.den W)).any id =
-      (decide (V.c true ∈ vs) || ((vs.filterMap V.getW).map (fun k => W.getD k false)).any id) := by
+    (vs.map (den W)).any id =
+      (decide (Sum.inl true ∈ vs) || ((vs.filterMap getW).map (fun k => W.getD k false)).any id) := by
   induction vs with
   | nil => simp
   | cons v vs ih =>
     cases v with
-    | c b => cases b <;> simp [V.den, V.getW, ih]
-    | w k =>
-      simp only [List.map_cons, List.any_cons, ih, List.filterMap_cons, V.getW, V.den,
+    | inl b => cases b <;> simp [den, getW, ih]
+    | inr k =>
+      simp only [List.map_cons, List.any_cons, ih, List.filterMap_cons, getW, den,
         List.mem_cons, reduceCtorEq, false_or, id]
-      cases W.getD k false <;> cases decide (V.c true ∈ vs) <;> simp
+      cases W.getD k false <;> cases decide (Sum.inl true ∈ vs) <;> simp
 
 lemma headD_den (W : List Bool) (vs : List V) :
-    (vs.map (V.den W)).headD false = (vs.headD (V.c false)).den W := by
+    (vs.map (den W)).headD false = den W (vs.headD (Sum.inl false)) := by
   cases vs <;> rfl
 
 lemma simp_some (W : List Bool) (op : GateOp) (hop : Basic op) (vs : List V) (v : V)
-    (h : simpV op vs = some v) : v.den W = op.eval (vs.map (V.den W)) := by
+    (h : simpV op vs = some v) : den W v = op.eval (vs.map (den W)) := by
   rcases hop with rfl | rfl | rfl
   · simp only [simpV] at h
     simp only [GateOp.eval, all_den]
     split_ifs at h with hf
-    · cases h; simp [V.den, hf]
+    · cases h; simp [den, hf]
     · simp only [hf, not_false_eq_true, decide_true, Bool.true_and]
       revert h
-      generalize vs.filterMap V.getW = fm
+      generalize vs.filterMap getW = fm
       intro h
-      rcases fm with _ | ⟨k, _ | ⟨k', fm⟩⟩ <;> simp at h <;> subst h <;> simp [V.den]
+      rcases fm with _ | ⟨k, _ | ⟨k', fm⟩⟩ <;> simp at h <;> subst h <;> simp [den]
   · simp only [simpV] at h
     simp only [GateOp.eval, any_den]
     split_ifs at h with hf
-    · cases h; simp [V.den, hf]
+    · cases h; simp [den, hf]
     · simp only [hf, decide_false, Bool.false_or]
       revert h
-      generalize vs.filterMap V.getW = fm
+      generalize vs.filterMap getW = fm
       intro h
-      rcases fm with _ | ⟨k, _ | ⟨k', fm⟩⟩ <;> simp at h <;> subst h <;> simp [V.den]
+      rcases fm with _ | ⟨k, _ | ⟨k', fm⟩⟩ <;> simp at h <;> subst h <;> simp [den]
   · simp only [simpV] at h
     simp only [GateOp.eval, headD_den]
     revert h
-    cases vs.headD (V.c false) with
-    | c b => intro h; cases h; rfl
-    | w k => intro h; cases h
+    cases vs.headD (Sum.inl false) with
+    | inl b => intro h; cases h; rfl
+    | inr k => intro h; cases h
 
 lemma simp_none (W : List Bool) (op : GateOp) (hop : Basic op) (vs : List V)
     (h : simpV op vs = none) :
-    op.eval ((emitIns op vs).map (fun i => W.getD i false)) = op.eval (vs.map (V.den W)) := by
+    op.eval ((emitIns op vs).map (fun i => W.getD i false)) = op.eval (vs.map (den W)) := by
   rcases hop with rfl | rfl | rfl
   · simp only [simpV] at h
     simp only [GateOp.eval, all_den, emitIns]
@@ -184,12 +162,12 @@ lemma simp_none (W : List Bool) (op : GateOp) (hop : Basic op) (vs : List V)
   · simp only [simpV] at h
     simp only [GateOp.eval, headD_den, emitIns]
     revert h
-    cases vs.headD (V.c false) with
-    | c b => intro h; cases h
-    | w k => intro _; rfl
+    cases vs.headD (Sum.inl false) with
+    | inl b => intro h; cases h
+    | inr k => intro _; rfl
 
-lemma simp_some_mem (op : GateOp) (vs : List V) (k : ℕ) (h : simpV op vs = some (V.w k)) :
-    V.w k ∈ vs := by
+lemma simp_some_mem (op : GateOp) (vs : List V) (k : ℕ) (h : simpV op vs = some (Sum.inr k)) :
+    Sum.inr k ∈ vs := by
   cases op with
   | and =>
     simp only [simpV] at h
@@ -198,13 +176,13 @@ lemma simp_some_mem (op : GateOp) (vs : List V) (k : ℕ) (h : simpV op vs = som
     split at h
     · cases h
     · rename_i k' hk'
-      simp only [Option.some.injEq, V.w.injEq] at h
+      simp only [Option.some.injEq, Sum.inr.injEq] at h
       subst h
-      have hj : k' ∈ vs.filterMap V.getW := by rw [hk']; simp
+      have hj : k' ∈ vs.filterMap getW := by rw [hk']; simp
       obtain ⟨a, ha, haj⟩ := List.mem_filterMap.mp hj
       cases a with
-      | c => simp [V.getW] at haj
-      | w => simp only [V.getW, Option.some.injEq] at haj; subst haj; exact ha
+      | inl => simp [getW] at haj
+      | inr => simp only [getW, Option.some.injEq] at haj; subst haj; exact ha
     · cases h
   | or =>
     simp only [simpV] at h
@@ -213,45 +191,44 @@ lemma simp_some_mem (op : GateOp) (vs : List V) (k : ℕ) (h : simpV op vs = som
     split at h
     · cases h
     · rename_i k' hk'
-      simp only [Option.some.injEq, V.w.injEq] at h
+      simp only [Option.some.injEq, Sum.inr.injEq] at h
       subst h
-      have hj : k' ∈ vs.filterMap V.getW := by rw [hk']; simp
+      have hj : k' ∈ vs.filterMap getW := by rw [hk']; simp
       obtain ⟨a, ha, haj⟩ := List.mem_filterMap.mp hj
       cases a with
-      | c => simp [V.getW] at haj
-      | w => simp only [V.getW, Option.some.injEq] at haj; subst haj; exact ha
+      | inl => simp [getW] at haj
+      | inr => simp only [getW, Option.some.injEq] at haj; subst haj; exact ha
     · cases h
   | not =>
     simp only [simpV] at h
     revert h
-    cases vs.headD (V.c false) with
-    | c b => intro h; cases h
-    | w k => intro h; cases h
+    cases vs.headD (Sum.inl false) with
+    | inl b => intro h; cases h
+    | inr k => intro h; cases h
   | mod m => simp [simpV] at h
   | maj => simp [simpV] at h
 
-lemma getD_mem (m : List V) (i : ℕ) (P : V → Prop) (hm : ∀ u ∈ m, P u) (hd : P (V.c false)) :
-    P (m.getD i (V.c false)) := by
+lemma getD_mem (m : List V) (i : ℕ) (P : V → Prop) (hm : ∀ u ∈ m, P u) (hd : P (Sum.inl false)) :
+    P (m.getD i (Sum.inl false)) := by
   rw [List.getD_eq_getElem?_getD]
   cases h : m[i]? with
   | none => exact hd
   | some u => exact hm u (List.mem_of_getElem? h)
 
-/-- The invariant of the transformation, for the new circuit run on `x`. -/
-structure Inv (n : ℕ) (x : List Bool) (w : List Bool) (st : List V × List Gate) : Prop where
-  len : st.1.length = w.length
-  den : ∀ i, (st.1.getD i (V.c false)).den (st.2.foldl wstep x) = w.getD i false
-  ok : ∀ v ∈ st.1, v.ok (st.2.foldl wstep x).length
+abbrev Inv (n : ℕ) (x : List Bool) (w : List Bool) (st : List V × List Gate) : Prop :=
+  st.1.length = w.length ∧
+  (∀ i, den (st.2.foldl wstep x) (st.1.getD i (Sum.inl false)) = w.getD i false) ∧
+  ∀ v ∈ st.1, okV (st.2.foldl wstep x).length v
 
 lemma inv_step (n : ℕ) (x : List Bool) (hx : x.length = n) (w : List Bool)
     (st : List V × List Gate) (g : Gate) (hg : Basic g.op) (hI : Inv n x w st) :
     Inv n x (wstep w g) (step n st g) := by
   set W := st.2.foldl wstep x with hW
-  set vs := g.inputs.map (fun i => st.1.getD i (V.c false)) with hvs
-  have hval : g.op.eval (g.inputs.map fun i => w.getD i false) = g.op.eval (vs.map (V.den W)) := by
+  set vs := g.inputs.map (fun i => st.1.getD i (Sum.inl false)) with hvs
+  have hval : g.op.eval (g.inputs.map fun i => w.getD i false) = g.op.eval (vs.map (den W)) := by
     congr 1
     rw [hvs, List.map_map]
-    exact List.map_congr_left (fun i _ => (hI.den i).symm)
+    exact List.map_congr_left (fun i _ => (hI.2.1 i).symm)
   have hWlen : W.length = n + st.2.length := by
     rw [hW, length_foldl_wstep, hx]
   unfold step
@@ -259,25 +236,25 @@ lemma inv_step (n : ℕ) (x : List Bool) (hx : x.length = n) (w : List Bool)
   cases hs : simpV g.op vs with
   | some v =>
     refine ⟨?_, ?_, ?_⟩
-    · simp [wstep, hI.len]
+    · simp [wstep, hI.1]
     · intro i
-      simp only [wstep, getD_concat, hI.len]
+      simp only [wstep, getD_concat, hI.1]
       split_ifs
-      · exact hI.den i
+      · exact hI.2.1 i
       · rw [← hW, simp_some W g.op hg vs v hs, hval]
       · rfl
     · intro u hu
       rcases List.mem_append.mp hu with hu | hu
-      · exact hI.ok u hu
+      · exact hI.2.2 u hu
       · simp only [List.mem_singleton] at hu
         subst hu
         cases u with
-        | c => trivial
-        | w k =>
+        | inl => trivial
+        | inr k =>
           have hk := simp_some_mem g.op vs k hs
           rw [hvs, List.mem_map] at hk
           obtain ⟨i, _, hi⟩ := hk
-          have := getD_mem st.1 i (V.ok W.length) hI.ok trivial
+          have := getD_mem st.1 i (okV W.length) hI.2.2 trivial
           rw [hi] at this
           exact this
   | none =>
@@ -285,27 +262,27 @@ lemma inv_step (n : ℕ) (x : List Bool) (hx : x.length = n) (w : List Bool)
         W ++ [g.op.eval ((emitIns g.op vs).map fun i => W.getD i false)] := by
       rw [List.foldl_append]; rfl
     refine ⟨?_, ?_, ?_⟩
-    · simp [wstep, hI.len]
+    · simp [wstep, hI.1]
     · intro i
       simp only [hfold]
-      simp only [wstep, getD_concat, hI.len]
+      simp only [wstep, getD_concat, hI.1]
       split_ifs with h1 h2
-      · rw [den_concat _ _ _ (getD_mem st.1 i (V.ok W.length) hI.ok trivial)]
-        exact hI.den i
-      · simp only [V.den, getD_concat, hWlen, lt_irrefl, if_false, if_true]
+      · rw [den_concat _ _ _ (getD_mem st.1 i (okV W.length) hI.2.2 trivial)]
+        exact hI.2.1 i
+      · simp only [den, getD_concat, hWlen, lt_irrefl, if_false, if_true]
         rw [simp_none W g.op hg vs hs, hval]
       · rfl
     · intro u hu
       rw [hfold, List.length_append, List.length_singleton]
       rcases List.mem_append.mp hu with hu | hu
       · have h3 : (List.foldl wstep x st.2).length = W.length := rfl
-        exact ok_mono (by omega) u (hI.ok u hu)
+        exact ok_mono (by omega) u (hI.2.2 u hu)
       · simp only [List.mem_singleton] at hu
         subst hu
         have h1 : (List.foldl wstep x st.2).length = n + st.2.length := by
           rw [length_foldl_wstep, hx]
         have h2 := hWlen
-        simp only [V.ok]; omega
+        simp only [okV]; omega
 
 lemma inv_fold (n : ℕ) (x : List Bool) (hx : x.length = n) (gs : List Gate)
     (hgs : ∀ g ∈ gs, Basic g.op) :
@@ -326,7 +303,7 @@ lemma step_len (n : ℕ) (st : List V × List Gate) (g : Gate) :
 
 lemma step_len_none (n : ℕ) (st : List V × List Gate) (g : Gate)
     (h : (step n st g).2.length = st.2.length + 1) :
-    simpV g.op (g.inputs.map (fun i => st.1.getD i (V.c false))) = none := by
+    simpV g.op (g.inputs.map (fun i => st.1.getD i (Sum.inl false))) = none := by
   revert h
   unfold step
   split <;> simp_all
@@ -342,7 +319,6 @@ lemma fold_len (n : ℕ) (gs : List Gate) :
     have h2 := step_len n st g
     omega
 
-/-- Gates of fan-in at most two in the basis AND, OR, NOT. -/
 def Good (g : Gate) : Prop := Basic g.op ∧ g.inputs.length ≤ 2
 
 lemma emitIns_len (op : GateOp) (vs : List V) (h : vs.length ≤ 2) : (emitIns op vs).length ≤ 2 := by
@@ -371,41 +347,38 @@ lemma good_fold (n : ℕ) (gs : List Gate) (hgs : ∀ g ∈ gs, Good g) :
         subst hg'
         exact ⟨hg.1, emitIns_len _ _ (by simp [hg.2])⟩
 
-
 lemma simpV_none_wires (op : GateOp) (hop : op = .and ∨ op = .or) (vs : List V)
-    (hlen : vs.length ≤ 2) (h : simpV op vs = none) : ∀ v ∈ vs, ∃ k, v = V.w k := by
+    (hlen : vs.length ≤ 2) (h : simpV op vs = none) : ∀ v ∈ vs, ∃ k, v = Sum.inr k := by
   rcases hop with rfl | rfl
   · match vs, hlen with
     | [], _ => simp [simpV] at h
     | [a], _ =>
       cases a with
-      | c b => cases b <;> simp [simpV, V.getW, List.filterMap_cons] at h
-      | w k => simp [simpV, V.getW, List.filterMap_cons] at h
+      | inl b => cases b <;> simp [simpV, getW, List.filterMap_cons] at h
+      | inr k => simp [simpV, getW, List.filterMap_cons] at h
     | [a, b], _ =>
       cases a with
-      | c b1 => cases b1 <;> cases b with
-        | c b2 => cases b2 <;> simp [simpV, V.getW, List.filterMap_cons] at h
-        | w k => simp [simpV, V.getW, List.filterMap_cons] at h
-      | w k1 => cases b with
-        | c b2 => cases b2 <;> simp [simpV, V.getW, List.filterMap_cons] at h
-        | w k2 => intro v hv; simp at hv; rcases hv with rfl | rfl <;> exact ⟨_, rfl⟩
+      | inl b1 => cases b1 <;> cases b with
+        | inl b2 => cases b2 <;> simp [simpV, getW, List.filterMap_cons] at h
+        | inr k => simp [simpV, getW, List.filterMap_cons] at h
+      | inr k1 => cases b with
+        | inl b2 => cases b2 <;> simp [simpV, getW, List.filterMap_cons] at h
+        | inr k2 => intro v hv; simp at hv; rcases hv with rfl | rfl <;> exact ⟨_, rfl⟩
   · match vs, hlen with
     | [], _ => simp [simpV] at h
     | [a], _ =>
       cases a with
-      | c b => cases b <;> simp [simpV, V.getW, List.filterMap_cons] at h
-      | w k => simp [simpV, V.getW, List.filterMap_cons] at h
+      | inl b => cases b <;> simp [simpV, getW, List.filterMap_cons] at h
+      | inr k => simp [simpV, getW, List.filterMap_cons] at h
     | [a, b], _ =>
       cases a with
-      | c b1 => cases b1 <;> cases b with
-        | c b2 => cases b2 <;> simp [simpV, V.getW, List.filterMap_cons] at h
-        | w k => simp [simpV, V.getW, List.filterMap_cons] at h
-      | w k1 => cases b with
-        | c b2 => cases b2 <;> simp [simpV, V.getW, List.filterMap_cons] at h
-        | w k2 => intro v hv; simp at hv; rcases hv with rfl | rfl <;> exact ⟨_, rfl⟩
+      | inl b1 => cases b1 <;> cases b with
+        | inl b2 => cases b2 <;> simp [simpV, getW, List.filterMap_cons] at h
+        | inr k => simp [simpV, getW, List.filterMap_cons] at h
+      | inr k1 => cases b with
+        | inl b2 => cases b2 <;> simp [simpV, getW, List.filterMap_cons] at h
+        | inr k2 => intro v hv; simp at hv; rcases hv with rfl | rfl <;> exact ⟨_, rfl⟩
 
-
-/-- The wires a gate really reads: all its inputs, except NOT, which reads only the first. -/
 def sig (g : Gate) : List ℕ :=
   match g.op with
   | .not => g.inputs.take 1
@@ -425,9 +398,9 @@ lemma step_len1 (n : ℕ) (st : List V × List Gate) (g : Gate) :
 lemma step_some_of_big (n N : ℕ) (st : List V × List Gate) (g : Gate) (hg : Good g)
     (hN : st.1.length ≤ N) (hc : (sig g).contains N = true) :
     (step n st g).2.length = st.2.length := by
-  have hcf : st.1.getD N (V.c false) = V.c false := by
+  have hcf : st.1.getD N (Sum.inl false) = Sum.inl false := by
     rw [List.getD_eq_getElem?_getD, List.getElem?_eq_none hN]; rfl
-  have hsome : simpV g.op (g.inputs.map (fun i => st.1.getD i (V.c false))) ≠ none := by
+  have hsome : simpV g.op (g.inputs.map (fun i => st.1.getD i (Sum.inl false))) ≠ none := by
     intro hnone
     rcases hg.1 with hop | hop | hop
     · have hw := simpV_none_wires g.op (Or.inl hop) _ (by simp [hg.2]) hnone
@@ -449,7 +422,7 @@ lemma step_some_of_big (n N : ℕ) (st : List V × List Gate) (g : Gate) (hg : G
         simp only [hin, List.map_cons, List.headD_cons, simpV, hcf] at hnone
         cases hnone
   unfold step
-  cases hs : simpV g.op (g.inputs.map (fun i => st.1.getD i (V.c false))) with
+  cases hs : simpV g.op (g.inputs.map (fun i => st.1.getD i (Sum.inl false))) with
   | none => exact absurd hs hsome
   | some v => rfl
 
@@ -470,11 +443,9 @@ lemma fold_len_count (n N : ℕ) (gs : List Gate) (hgs : ∀ g ∈ gs, Good g) :
       simp only [hc, if_true]; omega
     · simp only [hc, Bool.false_eq_true, ↓reduceIte, add_zero]; omega
 
-/-- Gate number `k`, with its reads of wire `h` sent to the missing wire `N` once `h` exists. -/
 def modG (n h N : ℕ) (p : Gate × ℕ) : Gate :=
   if h < n + p.2 then ⟨p.1.op, p.1.inputs.map (fun i => if i = h then N else i)⟩ else p.1
 
-/-- The gates of a circuit, from gate number `k` on, with `modG` applied. -/
 def modGs (n h N : ℕ) : List Gate → ℕ → List Gate
   | [], _ => []
   | g :: gs, k => modG n h N (g, k) :: modGs n h N gs (k + 1)
@@ -574,33 +545,30 @@ lemma mod_eq (n h N : ℕ) (gs : List Gate) : ∀ (k : ℕ) (w : List Bool), w.l
     rw [hstep]
     exact ih (k + 1) _ (by simp [wstep, hw]; omega) (by omega) hf
 
-/-- The starting map: every input wire stays where it is. -/
-def mId (n : ℕ) : List V := List.ofFn (fun i : Fin n => V.w i.val)
+def mId (n : ℕ) : List V := List.ofFn (fun i : Fin n => Sum.inr i.val)
 
 lemma inv_init (n : ℕ) (x : Fin n → Bool) :
     Inv n (List.ofFn x) (List.ofFn x) (mId n, []) := by
   refine ⟨by simp [mId], ?_, ?_⟩
   · intro i
     simp only [List.foldl_nil, mId]
-    by_cases h : i < n <;> simp [h, V.den, List.getD_eq_getElem?_getD, List.getElem?_ofFn]
+    by_cases h : i < n <;> simp [h, den, List.getD_eq_getElem?_getD, List.getElem?_ofFn]
   · intro v hv
     simp only [mId, List.mem_ofFn] at hv
     obtain ⟨i, rfl⟩ := hv
-    simp [V.ok]
+    simp [okV]
 
-/-- Where the value `v` is read in the new circuit with `L` wires: a constant reads the missing
-wire `L`, that is `false`. -/
 def idx (L : ℕ) : V → ℕ
-  | .w k => k
-  | .c _ => L
+  | Sum.inr k => k
+  | Sum.inl _ => L
 
-lemma idx_den (W : List Bool) (v : V) (hv : v ≠ V.c true) :
-    W.getD (idx W.length v) false = v.den W := by
+lemma idx_den (W : List Bool) (v : V) (hv : v ≠ Sum.inl true) :
+    W.getD (idx W.length v) false = den W v := by
   cases v with
-  | w k => rfl
-  | c b =>
+  | inr k => rfl
+  | inl b =>
     cases b
-    · simp only [idx, V.den]
+    · simp only [idx, den]
       rw [List.getD_eq_getElem?_getD, List.getElem?_eq_none (le_refl _)]
       rfl
     · exact absurd rfl hv
@@ -631,7 +599,7 @@ theorem PEqualNP.Outside.L_meta_194 : ∀ (n : ℕ) (C : PEqualNP.CircuitLowerBo
     simpa using this
   have hsize : C.size = C.gates.length := rfl
   by_cases hconst : ∀ x, circuitFun n C x = true
-  · -- the constant `true` takes one gate
+  ·
     have hD := hmin ⟨[⟨GateOp.and, []⟩], n⟩
       (by intro g hg; simp at hg; subst hg; simp)
       (by
@@ -648,35 +616,35 @@ theorem PEqualNP.Outside.L_meta_194 : ∀ (n : ℕ) (C : PEqualNP.CircuitLowerBo
     have hCm_good : ∀ g ∈ Cm.gates, Good g := modGs_good n h N C.gates 0 hgood
     have hCm_len : Cm.gates.length = C.gates.length := modGs_length n h N C.gates 0
     let R := Cm.gates.foldl (step n) (mId n, [])
-    let vh := R.1.getD h (V.c false)
-    let vo := R.1.getD C.output (V.c false)
+    let vh := R.1.getD h (Sum.inl false)
+    let vo := R.1.getD C.output (Sum.inl false)
     have hinv : ∀ x : Fin n → Bool,
         Inv n (List.ofFn x) (Cm.gates.foldl wstep (List.ofFn x)) R := fun x =>
       inv_fold n (List.ofFn x) (by simp) Cm.gates (fun g hg => (hCm_good g hg).1) _ _
         (inv_init n x)
-    have hvh : ∀ x : Fin n → Bool, vh.den (R.2.foldl wstep (List.ofFn x)) =
+    have hvh : ∀ x : Fin n → Bool, den (R.2.foldl wstep (List.ofFn x)) vh =
         (C.wires (List.ofFn x)).getD h false := by
       intro x
-      rw [(hinv x).den h, wires_eq]
+      rw [(hinv x).2.1 h, wires_eq]
       exact mod_h n h N C.gates 0 _ (by simp)
-    have hvo : ∀ x : Fin n → Bool, vo.den (R.2.foldl wstep (List.ofFn x)) =
+    have hvo : ∀ x : Fin n → Bool, den (R.2.foldl wstep (List.ofFn x)) vo =
         Cm.eval (List.ofFn x) := by
       intro x
-      rw [(hinv x).den C.output]
+      rw [(hinv x).2.1 C.output]
       rfl
     have hCm_eval : ∀ x : Fin n → Bool, (C.wires (List.ofFn x)).getD h false = false →
         Cm.eval (List.ofFn x) = C.eval (List.ofFn x) := by
       intro x hx
       simp only [Circuit.eval, wires_eq] at hx ⊢
       rw [mod_eq n h N C.gates 0 _ (by simp) (by omega) hx]
-    have hvh_ne : vh ≠ V.c true := by
+    have hvh_ne : vh ≠ Sum.inl true := by
       intro hv
       apply hconst
       intro x
       apply himp
       rw [← hvh x, hv]
       rfl
-    have hvo_ne : vo ≠ V.c true := by
+    have hvo_ne : vo ≠ Sum.inl true := by
       intro hv
       apply hconst
       intro x
